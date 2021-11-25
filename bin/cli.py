@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+import unittest
 
 import typer
 import torch
@@ -8,8 +9,9 @@ import git
 from ser.train import train as run_train
 from ser.constants import RESULTS_DIR
 from ser.data import train_dataloader, val_dataloader, test_dataloader
-from ser.params import Params, save_params
-from ser.transforms import transforms, normalize
+from ser.infer import infer as run_infer
+from ser.params import Params, save_params, load_params
+from ser.transforms import transforms, normalize, flip
 
 main = typer.Typer()
 
@@ -59,47 +61,60 @@ def train(
 
 
 @main.command()
-def infer():
-    run_path = Path("./path/to/one/of/your/training/runs")
-    label = 6
+def infer(
+    run_path: Path = typer.Option(
+        ..., "-p", "--path", help="Path to run from which you want to infer."),
+    label: int = typer.Option(
+        6, "-l", "--label", help="Label of image to show to the model"),
+    # Switch on and off transforms via typer 
+    norm_bool : bool = typer.Option(
+        True, "-n", "--normalise", help = "Activate Normalise transforms"),
+    
+    flip_bool : bool = typer.Option(
+        True, "-f", "--flip", help = "Activate Flip transforms")
+    ):
+    
+    """Run the inference code"""
+    params = load_params(run_path)
+    model = torch.load(run_path / "model.pt")
+    image = _select_test_image(label, norm_bool, flip_bool)
+    run_infer(params, model, image, label)
 
-    # TODO load the parameters from the run_path so we can print them out!
 
-    # select image to run inference for
-    dataloader = test_dataloader(1, transforms(normalize))
+def _select_test_image(label, norm_bool, flip_bool):
+    # DONE
+    
+    if norm_bool and flip_bool:
+        ts = [normalize, flip]
+    elif norm_bool and not flip_bool: 
+        ts = [normalize]
+    elif not norm_bool and flip_bool: 
+        ts = [flip]
+    else: 
+        raise TransformDefinitionError("Need to define a Transform")
+    dataloader = test_dataloader(1, transforms(*ts))
     images, labels = next(iter(dataloader))
     while labels[0].item() != label:
         images, labels = next(iter(dataloader))
+    return images
 
-    # load the model
-    model = torch.load(run_path / "model.pt")
+class TransformDefinitionError(Exception):
+    pass
 
-    # run inference
-    model.eval()
-    output = model(images)
-    pred = output.argmax(dim=1, keepdim=True)[0].item()
-    certainty = max(list(torch.exp(output)[0]))
-    pixels = images[0][0]
-    print(generate_ascii_art(pixels))
-    print(f"This is a {pred}")
+class Test(unittest.TestCase):
+    
+    # Check function returns what we want it to return with fixed label 
+    def test_fun_normalize(self):
+        label = 6
+        ts = [flip]
+        dataloader_n = test_dataloader(1, transforms(*ts))
+        images, labels = next(iter(dataloader_n))
+        while labels[0].item() != label:
+            images, labels = next(iter(dataloader_n))
+        return images
 
-
-def generate_ascii_art(pixels):
-    ascii_art = []
-    for row in pixels:
-        line = []
-        for pixel in row:
-            line.append(pixel_to_char(pixel))
-        ascii_art.append("".join(line))
-    return "\n".join(ascii_art)
-
-
-def pixel_to_char(pixel):
-    if pixel > 0.99:
-        return "O"
-    elif pixel > 0.9:
-        return "o"
-    elif pixel > 0:
-        return "."
-    else:
-        return " "
+    def test_select_test_image(self): 
+        assert torch.all(torch.eq(_select_test_image(6, False, True), self.test_fun_normalize()))
+        
+if __name__ == "__main__":
+    unittest.main()    
